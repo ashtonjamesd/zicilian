@@ -1,9 +1,10 @@
 const std = @import("std");
 
-const PieceType = enum { Pawn, Knight, Bishop, Rook, Queen, King };
-const PieceColor = enum { Black, White };
+const Piece = @import("piece.zig").Piece;
+const PieceColor = @import("piece.zig").PieceColor;
+const PieceType = @import("piece.zig").PieceType;
 
-const Piece = struct { piece: PieceType, color: PieceColor };
+const ChessError = error{ InvalidFile, InvalidRank, IllegalMove, NotYourTurn };
 
 pub const ansi = struct {
     pub const reset = "\x1b[0m";
@@ -11,43 +12,117 @@ pub const ansi = struct {
     pub const gray = "\x1b[90m";
 };
 
+pub const Point = struct {
+    x: u8,
+    y: u8,
+
+    pub fn from(x: u8, y: u8) Point {
+        return Point{ .x = x, .y = y };
+    }
+};
+
 pub const Chess = struct {
     board: [8][8]?Piece,
-    whitesMove: bool = true,
+    isWhitesMove: bool = true,
     moveCount: i16 = 0,
 
-    fn fileToInt(file: u8) u8 {
+    fn fileToInt(file: u8) !u8 {
+        if (file < 'a' or file > 'h') {
+            return ChessError.InvalidFile;
+        }
+
         return file - 'a';
     }
 
-    fn rankToInt(rank: u8) u8 {
-        return rank - '0' - 1; // 8 - (rank - '0');
+    fn rankToInt(rank: u8) !u8 {
+        if (rank < '1' or rank > '8') {
+            return ChessError.InvalidRank;
+        }
+
+        return rank - '0' - 1;
     }
 
-    pub fn playTurn(self: *Chess, move: []u8) void {
-        std.debug.print("move: {s}\n", .{move});
-        self.moveCount += 1;
+    fn pieceAt(self: *Chess, point: Point) ?Piece {
+        return self.board[point.y][point.x];
+    }
 
+    fn setEmptyAt(self: *Chess, point: Point) void {
+        self.board[point.y][point.x] = null;
+    }
+
+    fn putPieceAt(self: *Chess, point: Point, piece: Piece) void {
+        self.board[point.y][point.x] = piece;
+    }
+
+    fn swapTurn(self: *Chess) void {
+        self.isWhitesMove = !self.isWhitesMove;
+    }
+
+    fn illegalMove() ChessError {
+        std.debug.print("Illegal move\n", .{});
+        return ChessError.IllegalMove;
+    }
+
+    fn otherPlayersTurn() ChessError {
+        std.debug.print("It is not your turn\n", .{});
+        return ChessError.NotYourTurn;
+    }
+
+    pub fn playTurn(self: *Chess, move: []u8) !void {
         // skip move
         if (move[0] == 'x' and move[1] == 'x') {
             return;
         }
 
-        const fromX: u8 = fileToInt(move[0]);
-        const fromY: u8 = rankToInt(move[1]);
+        const fromFile: u8 = fileToInt(move[0]) catch {
+            return illegalMove();
+        };
+        const fromRank: u8 = rankToInt(move[1]) catch {
+            return illegalMove();
+        };
+        const from: Point = Point.from(fromFile, fromRank);
 
-        const toX: u8 = fileToInt(move[2]);
-        const toY: u8 = rankToInt(move[3]);
+        const piece = self.pieceAt(from).?;
 
-        const piece = self.board[fromY][fromX].?;
-        self.board[fromY][fromX] = null;
+        if (piece.isWhite() != self.isWhitesMove) {
+            return otherPlayersTurn();
+        }
 
-        self.board[toY][toX] = piece;
+        const toFile: u8 = fileToInt(move[2]) catch {
+            return illegalMove();
+        };
+        const toRank: u8 = rankToInt(move[3]) catch {
+            return illegalMove();
+        };
+        const to: Point = Point.from(toFile, toRank);
+
+        if (piece.isPawn() and !isValidPawnMove(piece, to, from)) {
+            return illegalMove();
+        }
+
+        self.setEmptyAt(from);
+        self.putPieceAt(to, piece);
+
+        self.moveCount += 1;
+        self.swapTurn();
     }
 
-    pub fn nextTurn(self: *Chess) void {
-        std.debug.print("{s} to move: ", .{if (self.whitesMove) "white" else "black"});
-        self.whitesMove = !self.whitesMove;
+    fn isValidPawnMove(piece: Piece, to: Point, from: Point) bool {
+        if (to.x != from.x) return false;
+
+        const isFirstMove: bool = (!piece.isWhite() and from.y == 6) or
+            (piece.isWhite() and from.y == 1);
+
+        const maxForwardMove: u8 = if (isFirstMove) 2 else 1;
+
+        if (piece.isWhite() and (from.y + maxForwardMove) < to.y) {
+            return false;
+        }
+        if (!piece.isWhite() and (from.y - maxForwardMove) > to.y) {
+            return false;
+        }
+
+        return true;
     }
 
     pub fn initBoard(self: *Chess) void {
@@ -61,20 +136,20 @@ pub const Chess = struct {
         const black: PieceColor = PieceColor.Black;
 
         for (0..8) |i| {
-            self.board[1][i] = Piece{ .color = white, .piece = PieceType.Pawn };
-            self.board[6][i] = Piece{ .color = black, .piece = PieceType.Pawn };
+            self.board[1][i] = Piece{ .color = white, .pieceType = PieceType.Pawn };
+            self.board[6][i] = Piece{ .color = black, .pieceType = PieceType.Pawn };
         }
 
         const back_rank = [_]PieceType{ .Rook, .Knight, .Bishop, .Queen, .King, .Bishop, .Knight, .Rook };
 
         for (0..8) |i| {
-            self.board[0][i] = Piece{ .color = white, .piece = back_rank[i] };
-            self.board[7][i] = Piece{ .color = black, .piece = back_rank[i] };
+            self.board[0][i] = Piece{ .color = white, .pieceType = back_rank[i] };
+            self.board[7][i] = Piece{ .color = black, .pieceType = back_rank[i] };
         }
     }
 
     fn pieceChar(piece: Piece) u8 {
-        return switch (piece.piece) {
+        return switch (piece.pieceType) {
             .Pawn => 'P',
             .Knight => 'N',
             .Bishop => 'B',
