@@ -2,10 +2,9 @@ const std = @import("std");
 const Chess = @import("chess.zig").Chess;
 
 pub fn main() !void {
-    var chess = Chess{ .board = undefined };
-    chess.initBoard();
-
     var allocator = std.heap.page_allocator;
+    var chess = Chess.init(allocator);
+
     const reader = std.io.getStdIn().reader();
 
     while (true) {

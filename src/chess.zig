@@ -25,6 +25,15 @@ pub const Chess = struct {
     board: [8][8]?Piece,
     isWhitesMove: bool = true,
     moveCount: i16 = 0,
+    captured: std.ArrayList(Piece),
+    allocator: std.mem.Allocator,
+
+    pub fn init(allocator: std.mem.Allocator) Chess {
+        var chess = Chess{ .board = undefined, .isWhitesMove = true, .moveCount = 1, .captured = std.ArrayList(Piece).init(allocator), .allocator = allocator };
+
+        chess.initBoard();
+        return chess;
+    }
 
     fn fileToInt(file: u8) !u8 {
         if (file < 'a' or file > 'h') {
@@ -68,9 +77,13 @@ pub const Chess = struct {
         return ChessError.NotYourTurn;
     }
 
+    fn capture(self: *Chess, piece: Piece) !void {
+        try self.captured.append(piece);
+    }
+
     pub fn playTurn(self: *Chess, move: []u8) !void {
-        // skip move
         if (move[0] == 'x' and move[1] == 'x') {
+            self.swapTurn();
             return;
         }
 
@@ -82,7 +95,7 @@ pub const Chess = struct {
         };
         const from: Point = Point.from(fromFile, fromRank);
 
-        const piece = self.pieceAt(from).?;
+        const piece = self.pieceAt(from) orelse return illegalMove();
 
         if (piece.isWhite() != self.isWhitesMove) {
             return otherPlayersTurn();
@@ -96,29 +109,100 @@ pub const Chess = struct {
         };
         const to: Point = Point.from(toFile, toRank);
 
-        if (piece.isPawn() and !isValidPawnMove(piece, to, from)) {
+        if (piece.isPawn() and !self.isValidPawnMove(piece, to, from)) {
             return illegalMove();
         }
 
+        if (piece.isKnight() and !self.isValidKnightMove(piece, to, from)) {
+            return illegalMove();
+        }
+
+        if (self.pieceAt(to)) |target| {
+            try self.capture(target);
+        }
+
         self.setEmptyAt(from);
+        self.setEmptyAt(to);
+
         self.putPieceAt(to, piece);
 
         self.moveCount += 1;
         self.swapTurn();
     }
 
-    fn isValidPawnMove(piece: Piece, to: Point, from: Point) bool {
+    fn isValidKnightMove(self: *Chess, piece: Piece, to: Point, from: Point) bool {
+        const dxs = [_]i8{ 1, 1, 2, 2, -1, -1, -2, -2 };
+        const dys = [_]i8{ -2, 2, -1, 1, -2, 2, -1, 1 };
+
+        const fromX: i8 = @intCast(from.x);
+        const fromY: i8 = @intCast(from.y);
+        const toX: i8 = @intCast(to.x);
+        const toY: i8 = @intCast(to.y);
+
+        for (dxs, dys) |dx, dy| {
+            const nx = fromX + dx;
+            const ny = fromY + dy;
+
+            if (nx >= 0 and nx < 8 and ny >= 0 and ny < 8) {
+                if (toX == nx and toY == ny) {
+                    const target = self.pieceAt(to);
+                    return target == null or target.?.color != piece.color;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    fn isValidPawnMove(self: *Chess, piece: Piece, to: Point, from: Point) bool {
+        const direction: i8 = if (piece.isWhite()) 1 else -1;
+
+        const fromY: i8 = @intCast(from.y);
+        const takeY: u8 = @intCast(fromY + direction);
+
+        if (takeY >= 0 and takeY < 8) {
+            const rightTakeMove = Point.from(from.x + 1, takeY);
+            if (rightTakeMove.x == to.x and rightTakeMove.y == to.y) {
+                return self.pieceAt(to) != null;
+            }
+        }
+
+        if (from.x > 0) {
+            const leftTakeMove = Point.from(from.x - 1, takeY);
+            if (leftTakeMove.x == to.x and leftTakeMove.y == to.y) {
+                return self.pieceAt(to) != null;
+            }
+        }
+
         if (to.x != from.x) return false;
+
+        if (self.pieceAt(to)) |_| return false;
 
         const isFirstMove: bool = (!piece.isWhite() and from.y == 6) or
             (piece.isWhite() and from.y == 1);
-
         const maxForwardMove: u8 = if (isFirstMove) 2 else 1;
+
+        if (to.y == from.y + 2) {
+            const inFront = Point.from(to.x, to.y - 1);
+            return self.pieceAt(to) == null and self.pieceAt(inFront) == null;
+        }
+
+        if (from.y > 1 and to.y == from.y - 2) {
+            const inFront = Point.from(to.x, to.y + 1);
+            return self.pieceAt(to) == null and self.pieceAt(inFront) == null;
+        }
 
         if (piece.isWhite() and (from.y + maxForwardMove) < to.y) {
             return false;
         }
         if (!piece.isWhite() and (from.y - maxForwardMove) > to.y) {
+            return false;
+        }
+
+        if (piece.isWhite() and to.y < from.y) {
+            return false;
+        }
+        if (!piece.isWhite() and to.y > from.y) {
             return false;
         }
 

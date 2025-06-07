@@ -13,4 +13,8 @@ pub const Piece = struct {
     pub fn isPawn(self: Piece) bool {
         return self.pieceType == PieceType.Pawn;
     }
+
+    pub fn isKnight(self: Piece) bool {
+        return self.pieceType == PieceType.Knight;
+    }
 };
